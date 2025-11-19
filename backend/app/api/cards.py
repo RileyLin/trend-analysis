@@ -1,4 +1,4 @@
-"""Card API routes."""
+"""Card API routes with proper serialization."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -6,12 +6,76 @@ from typing import List, Optional
 from datetime import datetime
 
 from app.db.database import get_db
-from app.schemas.card import CardCreate, CardUpdate, CardResponse
+from app.schemas.card import CardCreate, CardUpdate, CardResponse, InstrumentRef, TriggerExpr, QuoteReference
 from app.models.thesis import Thesis, ThesisInstrument, QuoteRef
 from app.models.trigger import TriggerRule, InvalidatorRule
 from app.models.instrument import Instrument
 
 router = APIRouter()
+
+
+def serialize_card(thesis: Thesis) -> dict:
+    """Serialize a Thesis model to CardResponse format."""
+    # Serialize instruments
+    instruments = []
+    for ti in thesis.instruments:
+        instruments.append({
+            "symbol": ti.instrument.symbol,
+            "venue": ti.instrument.venue,
+            "role": ti.role,
+            "display_name_en": ti.instrument.display_name_en,
+            "display_name_cn": ti.instrument.display_name_cn
+        })
+
+    # Serialize entry triggers
+    entry_triggers = []
+    for trigger in thesis.triggers:
+        entry_triggers.append({
+            "type": trigger.kind,
+            "expr": trigger.expr,
+            "nl_cn": trigger.nl_cn,
+            "nl_en": trigger.nl_en
+        })
+
+    # Serialize invalidators
+    invalidators = []
+    for inv in thesis.invalidators:
+        invalidators.append({
+            "type": inv.kind,
+            "expr": inv.expr,
+            "nl_cn": inv.nl_cn,
+            "nl_en": inv.nl_en
+        })
+
+    # Serialize quotes
+    why = []
+    for quote in thesis.quotes:
+        why.append({
+            "quote": quote.quote,
+            "source_loc": quote.source_loc,
+            "gloss_cn": quote.gloss_cn,
+            "gloss_en": quote.gloss_en
+        })
+
+    # Get catalysts and risks from JSONB or empty list
+    catalysts = thesis.catalysts if isinstance(thesis.catalysts, list) else []
+    risks = thesis.risks if isinstance(thesis.risks, list) else []
+
+    return {
+        "id": thesis.id,
+        "asof": thesis.asof,
+        "summary_cn": thesis.summary_cn,
+        "summary_en": thesis.summary_en,
+        "direction": thesis.direction,
+        "horizon": thesis.horizon,
+        "instruments": instruments,
+        "entry_triggers": entry_triggers,
+        "invalidators": invalidators,
+        "catalysts": catalysts,
+        "risks": risks,
+        "why": why,
+        "confidence": thesis.conviction or 0.0
+    }
 
 
 @router.post("/cards", response_model=CardResponse, status_code=201)
@@ -30,7 +94,9 @@ async def create_card(
             conviction=card.confidence,
             summary_cn=card.summary_cn,
             summary_en=card.summary_en,
-            direction=card.direction
+            direction=card.direction,
+            catalysts=card.catalysts,
+            risks=card.risks
         )
 
         db.add(thesis)
@@ -53,6 +119,7 @@ async def create_card(
                     display_name_cn=inst_ref.display_name_cn
                 )
                 db.add(instrument)
+                db.flush()  # Get the ID
 
             # Link to thesis
             thesis_inst = ThesisInstrument(
@@ -98,7 +165,7 @@ async def create_card(
         db.commit()
         db.refresh(thesis)
 
-        return thesis
+        return serialize_card(thesis)
 
     except Exception as e:
         db.rollback()
@@ -121,7 +188,7 @@ async def list_cards(
 
     cards = query.order_by(Thesis.asof.desc()).limit(100).all()
 
-    return cards
+    return [serialize_card(card) for card in cards]
 
 
 @router.get("/cards/{card_id}", response_model=CardResponse)
@@ -135,7 +202,7 @@ async def get_card(
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
 
-    return card
+    return serialize_card(card)
 
 
 @router.put("/cards/{card_id}", response_model=CardResponse)
@@ -166,10 +233,16 @@ async def update_card(
     if update.confidence is not None:
         card.conviction = update.confidence
 
+    if update.catalysts is not None:
+        card.catalysts = update.catalysts
+
+    if update.risks is not None:
+        card.risks = update.risks
+
     db.commit()
     db.refresh(card)
 
-    return card
+    return serialize_card(card)
 
 
 @router.delete("/cards/{card_id}", status_code=204)
