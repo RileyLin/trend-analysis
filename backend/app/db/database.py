@@ -37,7 +37,7 @@ def get_db():
 def init_db():
     """Initialize database - create all tables."""
     # Import models to register them
-    from app.models import thesis, instrument, alert, portfolio, glossary
+    from app.models import thesis, instrument, alert, portfolio, glossary, trigger, similarity
 
     Base.metadata.create_all(bind=engine)
     print("Database tables created successfully!")
